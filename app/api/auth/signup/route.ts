@@ -1,3 +1,5 @@
+export const runtime = 'nodejs'
+
 import { NextResponse } from 'next/server'
 import { adminDb } from '@/lib/firebaseAdmin'
 import bcrypt from 'bcryptjs'
