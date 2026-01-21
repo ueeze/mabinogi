@@ -4,7 +4,11 @@ import { useEffect, useMemo, useState } from 'react'
 import { abyssList } from '../../../data/abyss'
 import ContentCard from '../../../components/ContentCard'
 import type { Character } from '@/lib/characters'
-import { loadCharacters } from '@/lib/characters'
+import {
+  loadCharacters,
+  loadCharactersFromFirestore,
+  upsertCharactersToFirestore,
+} from '@/lib/characters'
 import { getWeekKeyKST, getWeekStartKST } from '@/lib/week'
 import { loadSession } from '@/lib/session'
 import { db } from '@/lib/firebaseClient'
@@ -39,11 +43,34 @@ export default function AbyssPage() {
   useEffect(() => {
     setMounted(true)
 
-    try {
-      setMyCharacters(loadCharacters())
-    } catch {
-      setMyCharacters([])
+    const run = async () => {
+      try {
+        const s = loadSession()
+        if (!s?.userId) {
+          setMyCharacters([])
+          return
+        }
+
+        // 1) Firestore에서 먼저 로드
+        const fromFs = await loadCharactersFromFirestore(s.userId)
+        if (fromFs.length > 0) {
+          setMyCharacters(fromFs)
+          return
+        }
+
+        // 2) Firestore가 비어있으면 (기존 PC 유저 대비) localStorage에서 가져와 업로드
+        const local = loadCharacters()
+        setMyCharacters(local)
+
+        if (local.length > 0) {
+          await upsertCharactersToFirestore(s.userId, local)
+        }
+      } catch {
+        setMyCharacters([])
+      }
     }
+
+    run()
   }, [])
 
   // Firestore에서 이번 주 내 어비스 체크 로드

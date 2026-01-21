@@ -26,7 +26,7 @@ type GuildMissionRow = {
 
 type Mission = { id: string; title: string; desc: string }
 
-type TabKey = 'all' | 'abyss' | 'raid' | 'gm' | 'summary'
+type TabKey = 'all' | 'abyss' | 'raid' | 'gm'
 
 function uniq2(arr: string[]) {
   return Array.from(new Set(arr)).slice(0, 2)
@@ -68,14 +68,6 @@ function GroupRow({
   )
 }
 
-function NickBadge({ name }: { name: string }) {
-  return (
-    <span className="inline-flex items-center rounded-full bg-indigo-50 px-3 py-1 text-sm font-semibold text-indigo-700">
-      {name}
-    </span>
-  )
-}
-
 function clampPercent(n: number) {
   return Math.max(0, Math.min(100, n))
 }
@@ -114,9 +106,6 @@ export default function HomePage() {
   const [onlyIncompleteAbyss, setOnlyIncompleteAbyss] = useState(false)
   const [onlyIncompleteRaid, setOnlyIncompleteRaid] = useState(false)
   const [onlyIncompleteGm, setOnlyIncompleteGm] = useState(false)
-
-  // 요약 탭 옵션
-  const [summaryOnlyIncomplete, setSummaryOnlyIncomplete] = useState(true)
 
   useEffect(() => {
     setMounted(true)
@@ -365,134 +354,6 @@ export default function HomePage() {
     return { label: '전체 진행률', ...progress.all }
   }, [tab, progress])
 
-  // ------- 미완료 요약 데이터 -------
-  const abyssSummaryByNick = useMemo(() => {
-    // nickname -> (abyssId -> Set(charName))
-    const out: Record<string, Record<string, Set<string>>> = {}
-
-    for (const r of abyssRows) {
-      const hit =
-        !q ||
-        r.nickname.toLowerCase().includes(q) ||
-        r.charName.toLowerCase().includes(q)
-
-      if (!hit) continue
-
-      if (!out[r.nickname]) out[r.nickname] = {}
-
-      for (const a of abyssList) {
-        if (r.checks?.[a.id] === true) continue
-        if (!out[r.nickname][a.id]) out[r.nickname][a.id] = new Set()
-        out[r.nickname][a.id].add(r.charName)
-      }
-    }
-
-    // 렌더용으로 Set -> string[]
-    const rows = Object.entries(out)
-      .map(([nickname, byAbyss]) => {
-        const items = abyssList
-          .map((a) => {
-            const chars = Array.from(byAbyss[a.id] || [])
-            return { id: a.id, title: a.title, chars, count: chars.length }
-          })
-          .filter((x) => x.count > 0)
-
-        const total = items.reduce((acc, x) => acc + x.count, 0)
-        return { nickname, items, total }
-      })
-      .filter((r) => r.total > 0)
-      .sort((a, b) => a.nickname.localeCompare(b.nickname, 'ko'))
-
-    return rows
-  }, [abyssRows, q])
-
-  const raidSummaryByNick = useMemo(() => {
-    // nickname -> (raidId -> Set(charName))
-    const out: Record<string, Record<string, Set<string>>> = {}
-
-    for (const r of raidRows) {
-      const hit =
-        !q ||
-        r.nickname.toLowerCase().includes(q) ||
-        r.charName.toLowerCase().includes(q)
-
-      if (!hit) continue
-
-      if (!out[r.nickname]) out[r.nickname] = {}
-
-      for (const a of raidList) {
-        if (r.checks?.[a.id] === true) continue
-        if (!out[r.nickname][a.id]) out[r.nickname][a.id] = new Set()
-        out[r.nickname][a.id].add(r.charName)
-      }
-    }
-
-    const rows = Object.entries(out)
-      .map(([nickname, byRaid]) => {
-        const items = raidList
-          .map((a) => {
-            const chars = Array.from(byRaid[a.id] || [])
-            return { id: a.id, title: a.title, chars, count: chars.length }
-          })
-          .filter((x) => x.count > 0)
-
-        const total = items.reduce((acc, x) => acc + x.count, 0)
-        return { nickname, items, total }
-      })
-      .filter((r) => r.total > 0)
-      .sort((a, b) => a.nickname.localeCompare(b.nickname, 'ko'))
-
-    return rows
-  }, [raidRows, q])
-
-  const gmSummaryByNick = useMemo(() => {
-    const rows = gmRows
-      .map((r) => {
-        const hit = !q || r.nickname.toLowerCase().includes(q)
-        if (!hit) return null
-
-        const selectedDone = (r.selectedIds || []).length === 2
-        const visible = gmVisibleFor(r).filter(Boolean)
-        const miss = selectedDone
-          ? visible.filter((m) => r.checks?.[m.id] !== true)
-          : []
-
-        const total = selectedDone ? miss.length : 0
-
-        return {
-          userId: r.userId,
-          nickname: r.nickname,
-          displayName: mainCharByUser[r.userId] || r.nickname,
-          selectedDone,
-          miss,
-          total,
-        }
-      })
-      .filter(Boolean) as {
-      userId: string
-      nickname: string
-      displayName: string
-      selectedDone: boolean
-      miss: Mission[]
-      total: number
-    }[]
-
-    const filtered = summaryOnlyIncomplete
-      ? rows.filter((r) => !r.selectedDone || r.total > 0)
-      : rows
-
-    filtered.sort((a, b) => a.nickname.localeCompare(b.nickname, 'ko'))
-    return filtered
-  }, [gmRows, q, summaryOnlyIncomplete, mainCharByUser])
-
-  const totalAbyssIncompleteCount = useMemo(() => {
-    return abyssSummaryByNick.reduce((acc, r) => acc + r.total, 0)
-  }, [abyssSummaryByNick])
-
-  const totalRaidIncompleteCount = useMemo(() => {
-    return raidSummaryByNick.reduce((acc, r) => acc + r.total, 0)
-  }, [raidSummaryByNick])
-
   if (!mounted) return null
 
   if (!session?.userId) {
@@ -537,9 +398,7 @@ export default function HomePage() {
   const tabHint =
     tab === 'gm'
       ? '길드미션은 “선택 2개 저장 완료한 유저”만 진행률 계산에 포함합니다.'
-      : tab === 'summary'
-        ? '미완료 요약 탭은 진행률 계산과 무관하고, 검색/필터만 적용됩니다.'
-        : ''
+      : ''
 
   return (
     <div className="space-y-4">
@@ -582,7 +441,6 @@ export default function HomePage() {
             <TabButton k="abyss" label="어비스" />
             <TabButton k="raid" label="레이드" />
             <TabButton k="gm" label="길드미션" />
-            <TabButton k="summary" label="미완료 요약" />
           </div>
 
           <div className="w-full lg:max-w-[360px]">
@@ -595,194 +453,6 @@ export default function HomePage() {
           </div>
         </div>
       </div>
-
-      {/* 요약 */}
-      {tab === 'summary' && (
-        <section className="rounded-2xl bg-white p-4 shadow-sm space-y-4">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="font-semibold text-gray-900">미완료 요약</div>
-              <div className="mt-1 text-sm text-gray-600">
-                닉네임/캐릭터 검색 적용됨.
-              </div>
-            </div>
-
-            <label className="flex items-center gap-2 text-sm text-gray-700">
-              <input
-                type="checkbox"
-                checked={summaryOnlyIncomplete}
-                onChange={(e) => setSummaryOnlyIncomplete(e.target.checked)}
-              />
-              미완료만 보기
-            </label>
-          </div>
-
-          {/* 어비스 요약 */}
-          {/* 어비스 요약 */}
-          <div className="rounded-2xl bg-gray-50 p-4">
-            <div className="flex items-end justify-between gap-3">
-              <div className="font-semibold text-gray-900">어비스 미완료</div>
-              <div className="text-sm text-gray-600">
-                총 미완료 체크 수: {totalAbyssIncompleteCount}
-              </div>
-            </div>
-
-            <div className="mt-3 space-y-3">
-              {abyssSummaryByNick.length === 0 ? (
-                <div className="text-sm text-gray-600">전원 완료 🎉</div>
-              ) : (
-                abyssSummaryByNick.map((row) => (
-                  <div key={row.nickname} className="rounded-xl bg-white p-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="text-sm font-semibold text-gray-900">
-                        {row.nickname}
-                      </div>
-                      <div className="text-xs text-gray-600">
-                        미완료 {row.total}개
-                      </div>
-                    </div>
-
-                    <div className="mt-2 space-y-2">
-                      {row.items.map((it) => (
-                        <div
-                          key={it.id}
-                          className="flex flex-wrap items-center gap-2"
-                        >
-                          <div className="text-sm font-medium text-gray-800">
-                            {it.title}
-                            <span className="ml-1 text-xs text-gray-500">
-                              ({it.count})
-                            </span>
-                          </div>
-
-                          <div className="flex flex-wrap gap-2">
-                            {it.chars.map((c) => (
-                              <span
-                                key={c}
-                                className="rounded-lg bg-gray-100 px-2 py-1 text-sm text-gray-800"
-                              >
-                                {c}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-
-          {/* 레이드 요약 */}
-          <div className="rounded-2xl bg-gray-50 p-4">
-            <div className="flex items-end justify-between gap-3">
-              <div className="font-semibold text-gray-900">레이드 미완료</div>
-              <div className="text-sm text-gray-600">
-                총 미완료 체크 수: {totalRaidIncompleteCount}
-              </div>
-            </div>
-
-            <div className="mt-3 space-y-3">
-              {raidSummaryByNick.length === 0 ? (
-                <div className="text-sm text-gray-600">전원 완료 🎉</div>
-              ) : (
-                raidSummaryByNick.map((row) => (
-                  <div key={row.nickname} className="rounded-xl bg-white p-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="text-sm font-semibold text-gray-900">
-                        {row.nickname}
-                      </div>
-                      <div className="text-xs text-gray-600">
-                        미완료 {row.total}개
-                      </div>
-                    </div>
-
-                    <div className="mt-2 space-y-2">
-                      {row.items.map((it) => (
-                        <div
-                          key={it.id}
-                          className="flex flex-wrap items-center gap-2"
-                        >
-                          <div className="text-sm font-medium text-gray-800">
-                            {it.title}
-                            <span className="ml-1 text-xs text-gray-500">
-                              ({it.count})
-                            </span>
-                          </div>
-
-                          <div className="flex flex-wrap gap-2">
-                            {it.chars.map((c) => (
-                              <span
-                                key={c}
-                                className="rounded-lg bg-gray-100 px-2 py-1 text-sm text-gray-800"
-                              >
-                                {c}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-
-          {/* 길드미션 요약 */}
-          <div className="rounded-2xl bg-gray-50 p-4">
-            <div className="font-semibold text-gray-900">길드미션 미완료</div>
-
-            <div className="mt-3 space-y-3">
-              {gmSummaryByNick.length === 0 ? (
-                <div className="text-sm text-gray-600">전원 완료 🎉</div>
-              ) : (
-                gmSummaryByNick.map((r) => (
-                  <div key={r.userId} className="rounded-xl bg-white p-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="text-sm font-semibold text-gray-900">
-                        {r.displayName}
-                      </div>
-
-                      {r.selectedDone ? (
-                        <div className="text-xs text-gray-600">
-                          미완료 {r.total}개
-                        </div>
-                      ) : (
-                        <span className="rounded-full bg-orange-100 px-2 py-1 text-xs font-medium text-orange-700">
-                          선택 미완료
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="mt-2">
-                      {!r.selectedDone ? (
-                        <div className="text-sm text-gray-600">
-                          선택 2개를 아직 저장하지 않았습니다.
-                        </div>
-                      ) : r.miss.length === 0 ? (
-                        <div className="text-sm text-gray-600">전부 완료</div>
-                      ) : (
-                        <div className="flex flex-wrap gap-2">
-                          {r.miss.map((m) => (
-                            <span
-                              key={m.id}
-                              className="rounded-lg bg-gray-100 px-2 py-1 text-sm text-gray-800"
-                            >
-                              {m.title}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </section>
-      )}
 
       {/* 어비스 표 */}
       {(tab === 'all' || tab === 'abyss') && (

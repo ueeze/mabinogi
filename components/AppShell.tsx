@@ -24,10 +24,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     setMe(s)
 
     if (isAuthPage) return
-
-    if (!s) {
-      router.replace('/login')
-    }
+    if (!s) router.replace('/login')
   }, [isAuthPage, router])
 
   const onLogout = () => {
@@ -38,7 +35,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   if (isAuthPage) return <>{children}</>
 
-  // 페이지별 배경 이미지 매핑
   const bgByPath: Record<string, string> = {
     '/': '/mabinogi1.png',
     '/abyss': '/mabinogi6.png',
@@ -47,136 +43,132 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     '/mypage': '/mabinogi7.png',
   }
 
-  // pathname이 /raid/xxx 같은 형태일 수도 있으니 startsWith로 처리
   const bgImage =
     Object.entries(bgByPath).find(([path]) =>
       path === '/' ? pathname === '/' : pathname.startsWith(path),
     )?.[1] || '/mabinogi1.png'
 
-  /**
-   * "위가 잘림" 해결:
-   * - bg-top 대신 bg-center 사용
-   * - 그리고 "살짝 위로 올려서" 보정하고 싶으면 backgroundPosition을 px로 직접 줌
-   *   (양수면 아래로 내려가서 윗부분이 더 보임)
-   */
-  const backgroundStyle = useMemo(() => {
-    return {
+  const backgroundStyle = useMemo(
+    () => ({
       backgroundImage: `url('${bgImage}')`,
       backgroundSize: 'cover',
       backgroundRepeat: 'no-repeat',
-      // 핵심: center + Y를 조금 내려서(=이미지를 아래로) 윗부분이 더 보이게
-      // 0px → 기본(center), 40px/60px 이런 식으로 조절 가능
       backgroundPosition: 'center 60px',
-    } as React.CSSProperties
-  }, [bgImage])
+    }),
+    [bgImage],
+  )
 
   return (
     <div className="relative min-h-screen">
-      {/* 배경 이미지: 스크롤 길이와 무관하게 화면(뷰포트) 기준으로 고정 */}
       <div className="fixed inset-0" style={backgroundStyle} />
-
-      {/* 오버레이(가독성) */}
       <div className="fixed inset-0 bg-black/35" />
 
-      {/* 실제 콘텐츠 */}
       <div className="relative z-10 min-h-screen">
-        {/* 고정 헤더 */}
+        {/* HEADER */}
         <header className="sticky top-0 z-50 border-b border-gray-200 bg-white/85 backdrop-blur">
-          <div className="mx-auto flex w-full max-w-md items-center justify-between gap-3 px-4 py-4 lg:max-w-6xl">
-            {/* 왼쪽: 로고/타이틀 */}
-            <Link
-              href="/"
-              className="text-2xl font-extrabold tracking-wide text-gray-900 drop-shadow-sm"
-            >
-              YUMONGMIN
-            </Link>
-
-            {/* 가운데: 상단 네비 */}
-            <nav className="hidden items-center gap-2 md:flex">
-              {nav.map((n) => {
-                const active =
-                  n.href === '/'
-                    ? pathname === '/'
-                    : pathname === n.href || pathname.startsWith(`${n.href}/`)
-
-                return (
-                  <Link
-                    key={n.href}
-                    href={n.href}
-                    className={`rounded-full px-4 py-2 text-sm font-medium transition whitespace-nowrap
-                      ${
-                        active
-                          ? 'bg-black text-white'
-                          : 'text-gray-700 hover:bg-white/70'
-                      }`}
-                  >
-                    {n.label}
-                  </Link>
-                )
-              })}
-            </nav>
-
-            {/* 오른쪽: 닉네임 + 로그아웃 + 마이페이지 */}
-            <div className="flex items-center gap-2">
-              {me ? (
-                <>
-                  <span className="hidden text-sm font-medium text-gray-800 sm:inline">
-                    {me.nickname}
-                  </span>
-                  <button
-                    onClick={onLogout}
-                    className="rounded-full bg-black px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:opacity-90 whitespace-nowrap"
-                  >
-                    로그아웃
-                  </button>
-                </>
-              ) : (
-                <Link
-                  href="/login"
-                  className="rounded-full bg-black px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:opacity-90 whitespace-nowrap"
-                >
-                  로그인
-                </Link>
-              )}
-
+          <div className="mx-auto w-full max-w-6xl px-4 py-3">
+            {/* 모바일 헤더 */}
+            <div className="flex items-center justify-between md:hidden">
               <Link
-                href="/mypage"
-                className="rounded-full bg-white/70 px-4 py-2 text-sm font-medium text-gray-800 shadow-sm transition hover:bg-white whitespace-nowrap"
+                href="/"
+                className="text-lg font-extrabold tracking-wide text-gray-900"
               >
-                마이페이지
+                YUMONGMIN
               </Link>
+
+              <div className="flex items-center gap-2">
+                <Link
+                  href="/mypage"
+                  className="rounded-full bg-white px-3 py-1 text-sm font-medium text-gray-800"
+                >
+                  마이페이지
+                </Link>
+                <button
+                  onClick={onLogout}
+                  className="rounded-full bg-black px-3 py-1 text-sm font-medium text-white"
+                >
+                  로그아웃
+                </button>
+              </div>
+            </div>
+
+            {/* 데스크톱 헤더 */}
+            <div className="hidden md:flex items-center justify-between">
+              <Link
+                href="/"
+                className="text-2xl font-extrabold tracking-wide text-gray-900"
+              >
+                YUMONGMIN
+              </Link>
+
+              <nav className="flex items-center gap-2">
+                {nav.map((n) => {
+                  const active =
+                    n.href === '/'
+                      ? pathname === '/'
+                      : pathname.startsWith(n.href)
+
+                  return (
+                    <Link
+                      key={n.href}
+                      href={n.href}
+                      className={`rounded-full px-4 py-2 text-sm font-medium
+                        ${
+                          active
+                            ? 'bg-black text-white'
+                            : 'text-gray-700 hover:bg-white/70'
+                        }`}
+                    >
+                      {n.label}
+                    </Link>
+                  )
+                })}
+              </nav>
+
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-gray-800">
+                  {me?.nickname}
+                </span>
+                <button
+                  onClick={onLogout}
+                  className="rounded-full bg-black px-4 py-2 text-sm font-medium text-white"
+                >
+                  로그아웃
+                </button>
+                <Link
+                  href="/mypage"
+                  className="rounded-full bg-white px-4 py-2 text-sm font-medium text-gray-800"
+                >
+                  마이페이지
+                </Link>
+              </div>
             </div>
           </div>
         </header>
 
-        {/* 본문 */}
-        <main className="mx-auto w-full max-w-md px-4 pb-10 pt-6 lg:max-w-6xl">
-          {/* 모바일 네비 */}
-          <nav className="flex items-center gap-2 overflow-x-auto pb-2 md:hidden">
-            {nav.map((n) => {
-              const active =
-                n.href === '/'
-                  ? pathname === '/'
-                  : pathname === n.href || pathname.startsWith(`${n.href}/`)
+        {/* 모바일 네비 */}
+        <nav className="md:hidden flex gap-2 overflow-x-auto px-4 py-3">
+          {nav.map((n) => {
+            const active =
+              n.href === '/' ? pathname === '/' : pathname.startsWith(n.href)
 
-              return (
-                <Link
-                  key={n.href}
-                  href={n.href}
-                  className={`shrink-0 rounded-full px-4 py-2 text-sm font-medium transition whitespace-nowrap
-                    ${
-                      active
-                        ? 'bg-black text-white'
-                        : 'bg-white/70 text-gray-700'
-                    }`}
-                >
-                  {n.label}
-                </Link>
-              )
-            })}
-          </nav>
+            return (
+              <Link
+                key={n.href}
+                href={n.href}
+                className={`shrink-0 rounded-full px-4 py-2 text-sm font-medium
+                  ${
+                    active ? 'bg-black text-white' : 'bg-white/70 text-gray-700'
+                  }`}
+              >
+                {n.label}
+              </Link>
+            )
+          })}
+        </nav>
 
-          <div className="mt-4">{children}</div>
+        <main className="mx-auto w-full max-w-6xl px-4 pb-10 pt-4">
+          {children}
         </main>
       </div>
     </div>

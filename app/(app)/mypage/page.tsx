@@ -1,17 +1,14 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { loadCharacters, saveCharacters, Character } from '@/lib/characters'
-import { loadSession } from '@/lib/session'
-import { db } from '@/lib/firebaseClient'
 import {
-  collection,
-  doc,
-  getDocs,
-  serverTimestamp,
-  setDoc,
-  writeBatch,
-} from 'firebase/firestore'
+  loadCharacters,
+  saveCharacters,
+  Character,
+  loadCharactersFromFirestore,
+  upsertCharactersToFirestore,
+} from '@/lib/characters'
+import { loadSession } from '@/lib/session'
 
 function uid() {
   return 'char-' + Math.random().toString(36).slice(2, 10)
@@ -30,79 +27,64 @@ export default function MyPage() {
     [],
   )
 
-  const syncCharactersToFirestore = async (nextChars: Character[]) => {
-    if (!session?.userId) return
-
-    const userId = session.userId
-    const colRef = collection(db, 'users', userId, 'characters')
-
-    const batch = writeBatch(db)
-
-    // 기존 문서들 확인해서 (삭제된 캐릭터) 정리
-    const existingSnap = await getDocs(colRef)
-    const existingIds = new Set(existingSnap.docs.map((d) => d.id))
-    const nextIds = new Set(nextChars.map((c) => c.id))
-
-    for (const id of existingIds) {
-      if (!nextIds.has(id)) {
-        batch.delete(doc(db, 'users', userId, 'characters', id))
-      }
-    }
-
-    // 현재 캐릭터들 upsert
-    for (const c of nextChars) {
-      batch.set(
-        doc(db, 'users', userId, 'characters', c.id),
-        {
-          name: c.name,
-          isMain: !!c.isMain,
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true },
-      )
-    }
-
-    // 유저 문서도 닉네임/업데이트 시간 유지 (홈에서 유저명 표시용으로 쓸 수 있음)
-    batch.set(
-      doc(db, 'users', userId),
-      { nickname: session.nickname, updatedAt: serverTimestamp() },
-      { merge: true },
-    )
-
-    await batch.commit()
-  }
-
   const saveBoth = async (next: Character[]) => {
-    // 로컬 저장(기존 로직 유지)
     saveCharacters(next)
-
-    // Firestore 저장(근본 해결)
-    try {
-      await syncCharactersToFirestore(next)
-    } catch (e) {
-      console.error(e)
-      window.alert(
-        '캐릭터 Firestore 저장에 실패했습니다. 콘솔(F12)을 확인해주세요!',
-      )
-    }
+    if (!session?.userId) return
+    await upsertCharactersToFirestore(session.userId, next)
   }
 
   useEffect(() => {
     setMounted(true)
 
-    const loaded = loadCharacters()
-    setChars(loaded)
+    const run = async () => {
+      if (!session?.userId) {
+        setChars([])
+        setDraftNames({})
+        return
+      }
 
-    const drafts: Record<string, string> = {}
-    for (const c of loaded) drafts[c.id] = c.name
-    setDraftNames(drafts)
+      try {
+        // 1) Firestore 우선
+        const fromFs = await loadCharactersFromFirestore(session.userId)
 
-    // 처음 들어왔을 때도 한번 동기화
-    if (loaded.length > 0) {
-      saveBoth(loaded)
+        if (fromFs.length > 0) {
+          setChars(fromFs)
+
+          const drafts: Record<string, string> = {}
+          for (const c of fromFs) drafts[c.id] = c.name
+          setDraftNames(drafts)
+
+          // 다른 페이지가 loadCharacters()로 바로 쓸 수 있게 로컬에도 저장
+          saveCharacters(fromFs)
+          return
+        }
+
+        // 2) Firestore 비어있으면 local fallback
+        const local = loadCharacters()
+        setChars(local)
+
+        const drafts: Record<string, string> = {}
+        for (const c of local) drafts[c.id] = c.name
+        setDraftNames(drafts)
+
+        // 3) local에 데이터가 있으면 Firestore 업로드
+        if (local.length > 0) {
+          await upsertCharactersToFirestore(session.userId, local)
+        }
+      } catch (e) {
+        console.error(e)
+        // Firestore 로드 실패해도 local이라도 보여주기
+        const local = loadCharacters()
+        setChars(local)
+
+        const drafts: Record<string, string> = {}
+        for (const c of local) drafts[c.id] = c.name
+        setDraftNames(drafts)
+      }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+
+    run()
+  }, [session?.userId])
 
   const canAdd = useMemo(() => newName.trim().length > 0, [newName])
 
@@ -111,13 +93,18 @@ export default function MyPage() {
     if (!name) return
 
     const id = uid()
-
     const next = [...chars, { id, name, isMain: false }]
+
     setChars(next)
     setDraftNames((prev) => ({ ...prev, [id]: name }))
     setNewName('')
 
-    await saveBoth(next)
+    try {
+      await saveBoth(next)
+    } catch (e) {
+      console.error(e)
+      window.alert('저장에 실패했어. 콘솔(F12) 확인해줘!')
+    }
   }
 
   const onChangeDraft = (id: string, value: string) => {
@@ -133,7 +120,14 @@ export default function MyPage() {
 
     const next = chars.map((c) => (c.id === id ? { ...c, name: nextName } : c))
     setChars(next)
-    await saveBoth(next)
+
+    try {
+      await saveBoth(next)
+    } catch (e) {
+      console.error(e)
+      window.alert('저장에 실패했어. 콘솔(F12) 확인해줘!')
+      return
+    }
 
     setSavedToast((prev) => ({ ...prev, [id]: true }))
     window.setTimeout(() => {
@@ -145,20 +139,21 @@ export default function MyPage() {
     const ok = window.confirm('이 캐릭터를 삭제할까요?')
     if (!ok) return
 
-    const next = chars.filter((c) => c.id !== id)
+    let next = chars.filter((c) => c.id !== id)
 
-    // 만약 본캐가 삭제되면, 남아있는 첫 캐릭터를 자동 본캐로(있다면)
-    if (next.length > 0) {
-      const hasMain = next.some((c) => c.isMain)
-      if (!hasMain) {
-        next[0] = { ...next[0], isMain: true }
-        for (let i = 1; i < next.length; i++)
-          next[i] = { ...next[i], isMain: false }
-      }
+    // 본캐가 사라지면 첫 캐릭터를 본캐로 보정
+    if (next.length > 0 && !next.some((c) => c.isMain)) {
+      next = next.map((c, i) => ({ ...c, isMain: i === 0 }))
     }
 
     setChars(next)
-    await saveBoth(next)
+
+    try {
+      await saveBoth(next)
+    } catch (e) {
+      console.error(e)
+      window.alert('저장에 실패했어. 콘솔(F12) 확인해줘!')
+    }
 
     setDraftNames((prev) => {
       const copy = { ...prev }
@@ -170,7 +165,13 @@ export default function MyPage() {
   const setMainChar = async (id: string) => {
     const next = chars.map((c) => ({ ...c, isMain: c.id === id }))
     setChars(next)
-    await saveBoth(next)
+
+    try {
+      await saveBoth(next)
+    } catch (e) {
+      console.error(e)
+      window.alert('저장에 실패했어. 콘솔(F12) 확인해줘!')
+    }
   }
 
   if (!mounted) return null
@@ -180,10 +181,10 @@ export default function MyPage() {
       <div className="rounded-2xl bg-white p-4 shadow-sm">
         <div className="text-lg font-semibold text-gray-900">마이페이지</div>
         <div className="mt-1 text-sm text-gray-600">
-          캐릭터 추가/삭제/이름 수정 (본캐는 1명만 선택 가능)
+          캐릭터 추가/삭제/이름 수정 (본캐는 1명)
         </div>
 
-        <div className="mt-4 flex items-center gap-2">
+        <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center">
           <input
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
@@ -193,7 +194,7 @@ export default function MyPage() {
           <button
             onClick={addChar}
             disabled={!canAdd}
-            className={`shrink-0 whitespace-nowrap rounded-xl px-5 py-2 text-sm font-medium text-white transition min-w-[88px]
+            className={`whitespace-nowrap rounded-xl px-5 py-2 text-sm font-medium text-white transition sm:min-w-[96px]
               ${canAdd ? 'bg-black hover:opacity-90' : 'bg-gray-300'}`}
           >
             추가
@@ -208,52 +209,53 @@ export default function MyPage() {
           {chars.map((c) => {
             const draft = draftNames[c.id] ?? ''
             const changed = draft.trim() !== c.name
+            const isMain = !!c.isMain
             const saved = !!savedToast[c.id]
             const saveDisabled = !changed || draft.trim().length === 0
-            const isMain = !!c.isMain
 
             return (
-              <div
-                key={c.id}
-                className="flex items-center gap-2 rounded-xl bg-gray-50 px-3 py-2"
-              >
-                <input
-                  value={draft}
-                  onChange={(e) => onChangeDraft(c.id, e.target.value)}
-                  className="w-full bg-transparent text-sm text-gray-900 outline-none"
-                />
+              <div key={c.id} className="rounded-xl bg-gray-50 px-3 py-3">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <input
+                    value={draft}
+                    onChange={(e) => onChangeDraft(c.id, e.target.value)}
+                    className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-gray-400"
+                  />
 
-                <button
-                  onClick={() => setMainChar(c.id)}
-                  className={`shrink-0 whitespace-nowrap rounded-lg px-4 py-2 text-sm font-medium shadow-sm transition min-w-[88px]
-                    ${
-                      isMain
-                        ? 'bg-yellow-300 text-black'
-                        : 'bg-white text-gray-800 hover:bg-gray-100'
-                    }`}
-                >
-                  {isMain ? '본캐' : '본캐로'}
-                </button>
+                  <div className="flex flex-wrap gap-2 sm:flex-nowrap sm:justify-end">
+                    <button
+                      onClick={() => setMainChar(c.id)}
+                      className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-medium shadow-sm transition min-w-[88px]
+                        ${
+                          isMain
+                            ? 'bg-yellow-300 text-black'
+                            : 'bg-white text-gray-800 hover:bg-gray-100'
+                        }`}
+                    >
+                      {isMain ? '본캐' : '본캐로'}
+                    </button>
 
-                <button
-                  onClick={() => saveName(c.id)}
-                  disabled={saveDisabled}
-                  className={`shrink-0 whitespace-nowrap rounded-lg px-4 py-2 text-sm font-medium shadow-sm transition min-w-[88px]
-                    ${
-                      saveDisabled
-                        ? 'bg-white text-gray-400'
-                        : 'bg-black text-white hover:opacity-90'
-                    }`}
-                >
-                  {saved ? '저장됨' : '저장'}
-                </button>
+                    <button
+                      onClick={() => saveName(c.id)}
+                      disabled={saveDisabled}
+                      className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-medium shadow-sm transition min-w-[88px]
+                        ${
+                          saveDisabled
+                            ? 'bg-white text-gray-400'
+                            : 'bg-black text-white hover:opacity-90'
+                        }`}
+                    >
+                      {saved ? '저장됨' : '저장'}
+                    </button>
 
-                <button
-                  onClick={() => deleteChar(c.id)}
-                  className="shrink-0 whitespace-nowrap rounded-lg bg-white px-4 py-2 text-sm font-medium text-gray-800 shadow-sm transition hover:bg-gray-100 min-w-[88px]"
-                >
-                  삭제
-                </button>
+                    <button
+                      onClick={() => deleteChar(c.id)}
+                      className="whitespace-nowrap rounded-lg bg-white px-4 py-2 text-sm font-medium text-gray-800 shadow-sm transition hover:bg-gray-100 min-w-[88px]"
+                    >
+                      삭제
+                    </button>
+                  </div>
+                </div>
               </div>
             )
           })}
