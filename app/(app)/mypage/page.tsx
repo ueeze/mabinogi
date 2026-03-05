@@ -9,6 +9,7 @@ import {
   upsertCharactersToFirestore,
 } from '@/lib/characters'
 import { loadSession } from '@/lib/session'
+import { deleteCharacterFromFirestore } from '@/lib/characters'
 
 function uid() {
   return 'char-' + Math.random().toString(36).slice(2, 10)
@@ -141,7 +142,6 @@ export default function MyPage() {
 
     let next = chars.filter((c) => c.id !== id)
 
-    // 본캐가 사라지면 첫 캐릭터를 본캐로 보정
     if (next.length > 0 && !next.some((c) => c.isMain)) {
       next = next.map((c, i) => ({ ...c, isMain: i === 0 }))
     }
@@ -149,6 +149,11 @@ export default function MyPage() {
     setChars(next)
 
     try {
+      // Firestore 캐릭터 실제 삭제
+      if (session?.userId) {
+        await deleteCharacterFromFirestore(session.userId, id)
+      }
+
       await saveBoth(next)
     } catch (e) {
       console.error(e)
