@@ -7,7 +7,7 @@ import { guildMissionFixed, guildMissionPool } from '../../data/guildMission'
 import { getWeekKeyKST } from '@/lib/week'
 import { loadSession } from '@/lib/session'
 import { db } from '@/lib/firebaseClient'
-import { collection, doc, getDoc, getDocs } from 'firebase/firestore'
+import { collection, getDocs } from 'firebase/firestore'
 
 type CharRow = {
   userId: string
@@ -58,7 +58,7 @@ function GroupRow({
 }) {
   return (
     <tr className={first ? '' : 'border-t-4 border-gray-300'}>
-      <td colSpan={colSpan} className="py-4 bg-gray-100">
+      <td colSpan={colSpan} className="bg-gray-100 py-4">
         <div className="flex items-center gap-3">
           <span className="h-5 w-1.5 rounded-full bg-gray-900/40" />
           <span className="text-base font-semibold text-gray-900">{name}</span>
@@ -100,7 +100,6 @@ export default function HomePage() {
     {},
   )
 
-  // UI
   const [tab, setTab] = useState<TabKey>('all')
   const [query, setQuery] = useState('')
   const [onlyIncompleteAbyss, setOnlyIncompleteAbyss] = useState(false)
@@ -118,102 +117,89 @@ export default function HomePage() {
     const run = async () => {
       setLoading(true)
       try {
-        const usersSnap = await getDocs(collection(db, 'users'))
-        const userList = usersSnap.docs.map((d) => ({
-          userId: d.id,
-          nickname: String(d.data()?.nickname || '길드원'),
-        }))
+        const [weeklyUsersSnap, dashSnap] = await Promise.all([
+          getDocs(collection(db, 'weeks', weekKey, 'users')),
+          getDocs(collection(db, 'weeks', weekKey, 'dashboard')),
+        ])
 
-        const abyssAll: CharRow[] = []
-        const raidAll: CharRow[] = []
-        const gmAll: GuildMissionRow[] = []
-        const mainMap: Record<string, string> = {}
+        const dashMap = new Map<string, any>()
+        dashSnap.forEach((d) => {
+          dashMap.set(d.id, d.data())
+        })
 
-        for (const u of userList) {
-          const charsSnap = await getDocs(
-            collection(db, 'users', u.userId, 'characters'),
+        const results = weeklyUsersSnap.docs.map((userDoc) => {
+          const userId = userDoc.id
+          const weeklyUserData = userDoc.data() as { nickname?: string }
+          const dashboardData = dashMap.get(userId) as
+            | {
+                nickname?: string
+                mainCharName?: string
+                abyss?: Record<
+                  string,
+                  { charName?: string; checks?: Record<string, boolean> }
+                >
+                raid?: Record<
+                  string,
+                  { charName?: string; checks?: Record<string, boolean> }
+                >
+                guildMission?: {
+                  selectedIds?: string[]
+                  checks?: Record<string, boolean>
+                }
+              }
+            | undefined
+
+          const nickname = String(
+            dashboardData?.nickname || weeklyUserData?.nickname || '길드원',
           )
-          const chars = charsSnap.docs.map((d) => {
-            const data = d.data() as { name?: string; isMain?: boolean }
-            return {
-              charId: d.id,
-              charName: String(data?.name || '캐릭터'),
-              isMain: !!data?.isMain,
-            }
-          })
+          const mainCharName = String(dashboardData?.mainCharName || nickname)
 
-          if (chars.length === 0) continue
+          const abyssRows: CharRow[] = Object.entries(
+            dashboardData?.abyss || {},
+          ).map(([charId, v]) => ({
+            userId,
+            nickname,
+            charId,
+            charName: String(v?.charName || '캐릭터'),
+            checks: v?.checks || {},
+          }))
 
-          // 본캐(메인) 이름 맵 저장: isMain 우선, 없으면 첫 캐릭
-          const main = chars.find((c) => c.isMain) || chars[0]
-          mainMap[u.userId] = main?.charName || u.nickname
+          const raidRows: CharRow[] = Object.entries(
+            dashboardData?.raid || {},
+          ).map(([charId, v]) => ({
+            userId,
+            nickname,
+            charId,
+            charName: String(v?.charName || '캐릭터'),
+            checks: v?.checks || {},
+          }))
 
-          const abyssSnap = await getDocs(
-            collection(db, 'weeks', weekKey, 'users', u.userId, 'abyssChars'),
-          )
-          const abyssChecksByChar: Record<string, Record<string, boolean>> = {}
-          abyssSnap.forEach((d) => {
-            const data = d.data() as { checks?: Record<string, boolean> }
-            abyssChecksByChar[d.id] = data.checks || {}
-          })
-
-          const raidSnap = await getDocs(
-            collection(db, 'weeks', weekKey, 'users', u.userId, 'raidChars'),
-          )
-          const raidChecksByChar: Record<string, Record<string, boolean>> = {}
-          raidSnap.forEach((d) => {
-            const data = d.data() as { checks?: Record<string, boolean> }
-            raidChecksByChar[d.id] = data.checks || {}
-          })
-
-          const gmDocRef = doc(
-            db,
-            'weeks',
-            weekKey,
-            'users',
-            u.userId,
-            'guildMission',
-            'main',
-          )
-          const gmSnap = await getDoc(gmDocRef)
-          if (gmSnap.exists()) {
-            const data = gmSnap.data() as {
-              selected?: string[]
-              checks?: Record<string, boolean>
-            }
-            gmAll.push({
-              userId: u.userId,
-              nickname: u.nickname,
-              selectedIds: Array.isArray(data.selected)
-                ? uniq2(data.selected)
-                : [],
-              checks: data.checks || {},
-            })
-          } else {
-            gmAll.push({
-              userId: u.userId,
-              nickname: u.nickname,
-              selectedIds: [],
-              checks: {},
-            })
+          const gmRow: GuildMissionRow = {
+            userId,
+            nickname,
+            selectedIds: Array.isArray(dashboardData?.guildMission?.selectedIds)
+              ? uniq2(dashboardData!.guildMission!.selectedIds!)
+              : [],
+            checks: dashboardData?.guildMission?.checks || {},
           }
 
-          for (const c of chars) {
-            abyssAll.push({
-              userId: u.userId,
-              nickname: u.nickname,
-              charId: c.charId,
-              charName: c.charName,
-              checks: abyssChecksByChar[c.charId] || {},
-            })
+          return {
+            userId,
+            abyssRows,
+            raidRows,
+            gmRow,
+            mainCharName,
+          }
+        })
 
-            raidAll.push({
-              userId: u.userId,
-              nickname: u.nickname,
-              charId: c.charId,
-              charName: c.charName,
-              checks: raidChecksByChar[c.charId] || {},
-            })
+        const abyssAll: CharRow[] = results.flatMap((r) => r.abyssRows)
+        const raidAll: CharRow[] = results.flatMap((r) => r.raidRows)
+        const gmAll: GuildMissionRow[] = results.map((r) => r.gmRow)
+
+        const mainMap: Record<string, string> = {}
+        for (const r of results) {
+          if (r.mainCharName) {
+            mainMap[r.userId] = r.mainCharName
           }
         }
 
@@ -255,7 +241,6 @@ export default function HomePage() {
     return [guildMissionFixed, ...picked]
   }
 
-  // ---- 필터 ----
   const filteredAbyss = useMemo(() => {
     const ids = abyssList.map((a) => a.id)
     return abyssRows.filter((r) => {
@@ -295,7 +280,6 @@ export default function HomePage() {
     })
   }, [gmRows, q, onlyIncompleteGm, mainCharByUser])
 
-  // ---- 진행률 계산(전체/어비스/레이드/길드미션) ----
   const progress = useMemo(() => {
     const calcAbyss = () => {
       const total = abyssRows.length * abyssList.length
@@ -321,7 +305,7 @@ export default function HomePage() {
 
     const calcGm = () => {
       const eligible = gmRows.filter((r) => (r.selectedIds || []).length === 2)
-      const total = eligible.length * 3 // 고정1 + 선택2
+      const total = eligible.length * 3
       const done = eligible.reduce((acc, r) => {
         const visible = gmVisibleFor(r).filter(Boolean)
         const n = visible.filter((m) => r.checks?.[m.id] === true).length
@@ -394,7 +378,6 @@ export default function HomePage() {
     )
   }
 
-  // 탭 라벨/설명 (진행률 박스 아래에 표시)
   const tabHint =
     tab === 'gm'
       ? '길드미션은 “선택 2개 저장 완료한 유저”만 진행률 계산에 포함합니다.'
@@ -402,7 +385,6 @@ export default function HomePage() {
 
   return (
     <div className="space-y-4">
-      {/* 상단 */}
       <div
         id="sec-top"
         className="scroll-mt-24 rounded-2xl bg-white p-4 shadow-sm"
@@ -412,7 +394,6 @@ export default function HomePage() {
           이번 주 기준: {weekKey} (월 06:00 시작)
         </div>
 
-        {/* 진행률(탭별) - 가로 꽉 */}
         <div className="mt-4 rounded-2xl bg-gray-50 p-4">
           <div className="flex items-end justify-between gap-3">
             <div className="text-sm font-semibold text-gray-900">
@@ -434,7 +415,6 @@ export default function HomePage() {
           ) : null}
         </div>
 
-        {/* 탭 + 검색 (검색 위치 어정쩡 해결: 같은 줄 오른쪽 고정) */}
         <div className="mt-4 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-wrap gap-2">
             <TabButton k="all" label="전체" />
@@ -454,7 +434,6 @@ export default function HomePage() {
         </div>
       </div>
 
-      {/* 어비스 표 */}
       {(tab === 'all' || tab === 'abyss') && (
         <section
           id="sec-abyss"
@@ -543,7 +522,6 @@ export default function HomePage() {
         </section>
       )}
 
-      {/* 레이드 표 (어비스랑 동일한 옵션3 스타일: 닉네임 컬럼 제거 + 그룹행) */}
       {(tab === 'all' || tab === 'raid') && (
         <section
           id="sec-raid"
@@ -604,7 +582,7 @@ export default function HomePage() {
                           >
                             <td
                               colSpan={1 + raidList.length}
-                              className="py-4 bg-gray-100"
+                              className="bg-gray-100 py-4"
                             >
                               <div className="flex items-center gap-3">
                                 <span className="h-5 w-1.5 rounded-full bg-gray-900/40" />
@@ -644,7 +622,6 @@ export default function HomePage() {
         </section>
       )}
 
-      {/* 길드미션 표 */}
       {(tab === 'all' || tab === 'gm') && (
         <section
           id="sec-gm"
@@ -689,7 +666,6 @@ export default function HomePage() {
                     const opt1 = visible[1]
                     const opt2 = visible[2]
 
-                    // 미완료만 보기 + 선택 미완료는 보이게
                     if (onlyIncompleteGm) {
                       const selectedDone = (r.selectedIds || []).length === 2
                       if (selectedDone) {

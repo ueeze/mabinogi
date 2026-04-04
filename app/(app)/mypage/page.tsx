@@ -7,9 +7,11 @@ import {
   Character,
   loadCharactersFromFirestore,
   upsertCharactersToFirestore,
+  deleteCharacterFromFirestore,
 } from '@/lib/characters'
 import { loadSession } from '@/lib/session'
-import { deleteCharacterFromFirestore } from '@/lib/characters'
+import { getWeekKeyKST } from '@/lib/week'
+import { loadDashboardDoc, saveDashboardDoc } from '@/lib/dashboard'
 
 function uid() {
   return 'char-' + Math.random().toString(36).slice(2, 10)
@@ -27,11 +29,54 @@ export default function MyPage() {
     () => (typeof window === 'undefined' ? null : loadSession()),
     [],
   )
+  const weekKey = useMemo(() => getWeekKeyKST(), [])
+
+  const syncDashboardCharacters = async (next: Character[]) => {
+    if (!session?.userId) return
+
+    const main = next.find((c) => c.isMain) || next[0] || null
+    const mainCharName = main?.name || session.nickname
+
+    const existing = await loadDashboardDoc(weekKey, session.userId)
+
+    const nextAbyss: Record<
+      string,
+      { charName: string; checks: Record<string, boolean> }
+    > = {}
+    const nextRaid: Record<
+      string,
+      { charName: string; checks: Record<string, boolean> }
+    > = {}
+
+    for (const c of next) {
+      nextAbyss[c.id] = {
+        charName: c.name,
+        checks: existing?.abyss?.[c.id]?.checks || {},
+      }
+
+      nextRaid[c.id] = {
+        charName: c.name,
+        checks: existing?.raid?.[c.id]?.checks || {},
+      }
+    }
+
+    await saveDashboardDoc(weekKey, session.userId, {
+      nickname: session.nickname,
+      mainCharName,
+      abyss: nextAbyss,
+      raid: nextRaid,
+      guildMission: existing?.guildMission || {
+        selectedIds: [],
+        checks: {},
+      },
+    })
+  }
 
   const saveBoth = async (next: Character[]) => {
     saveCharacters(next)
     if (!session?.userId) return
     await upsertCharactersToFirestore(session.userId, next)
+    await syncDashboardCharacters(next)
   }
 
   useEffect(() => {
@@ -45,7 +90,6 @@ export default function MyPage() {
       }
 
       try {
-        // 1) Firestore 우선
         const fromFs = await loadCharactersFromFirestore(session.userId)
 
         if (fromFs.length > 0) {
@@ -55,12 +99,10 @@ export default function MyPage() {
           for (const c of fromFs) drafts[c.id] = c.name
           setDraftNames(drafts)
 
-          // 다른 페이지가 loadCharacters()로 바로 쓸 수 있게 로컬에도 저장
           saveCharacters(fromFs)
           return
         }
 
-        // 2) Firestore 비어있으면 local fallback
         const local = loadCharacters()
         setChars(local)
 
@@ -68,13 +110,12 @@ export default function MyPage() {
         for (const c of local) drafts[c.id] = c.name
         setDraftNames(drafts)
 
-        // 3) local에 데이터가 있으면 Firestore 업로드
         if (local.length > 0) {
           await upsertCharactersToFirestore(session.userId, local)
+          await syncDashboardCharacters(local)
         }
       } catch (e) {
         console.error(e)
-        // Firestore 로드 실패해도 local이라도 보여주기
         const local = loadCharacters()
         setChars(local)
 
@@ -149,7 +190,6 @@ export default function MyPage() {
     setChars(next)
 
     try {
-      // Firestore 캐릭터 실제 삭제
       if (session?.userId) {
         await deleteCharacterFromFirestore(session.userId, id)
       }

@@ -14,6 +14,7 @@ import {
   serverTimestamp,
   updateDoc,
 } from 'firebase/firestore'
+import { loadDashboardDoc, saveDashboardDoc } from '@/lib/dashboard'
 
 type Mission = { id: string; title: string; desc: string }
 
@@ -36,13 +37,9 @@ export default function GuildMissionPage() {
   const [mounted, setMounted] = useState(false)
   const [loading, setLoading] = useState(false)
 
-  // 선택 2개
   const [selectedIds, setSelectedIds] = useState<string[]>([])
-  // 체크 상태
   const [checkedMap, setCheckedMap] = useState<Record<string, boolean>>({})
 
-  // Firestore 경로(유저 단위)
-  // weeks/{weekKey}/users/{userId}/guildMission/main
   const gmDocRef = useMemo(() => {
     if (!session?.userId) return null
     return doc(
@@ -60,7 +57,6 @@ export default function GuildMissionPage() {
     setMounted(true)
   }, [])
 
-  // 최초 로드: Firestore에서 selected/checks 가져오기
   useEffect(() => {
     if (!mounted) return
     if (!session?.userId) return
@@ -69,7 +65,6 @@ export default function GuildMissionPage() {
     const run = async () => {
       setLoading(true)
       try {
-        // 사용자 문서 닉네임/updatedAt 기록(홈에서 users 목록 잡히게)
         await setDoc(
           doc(db, 'weeks', weekKey, 'users', session.userId),
           {
@@ -107,7 +102,6 @@ export default function GuildMissionPage() {
     run()
   }, [mounted, session?.userId, session?.nickname, weekKey, gmDocRef, expireAt])
 
-  // 이번 주에 보여줄 미션(고정 1 + 선택 2)
   const visibleMissions: Mission[] = useMemo(() => {
     const picked = guildMissionPool.filter((m) => selectedIds.includes(m.id))
     return [guildMissionFixed, ...picked]
@@ -123,7 +117,26 @@ export default function GuildMissionPage() {
     })
   }
 
-  // 선택 2개 저장(Firestore)
+  const syncDashboardGuildMission = async (
+    nextSelectedIds: string[],
+    nextCheckedMap: Record<string, boolean>,
+  ) => {
+    if (!session?.userId) return
+
+    const existing = await loadDashboardDoc(weekKey, session.userId)
+
+    await saveDashboardDoc(weekKey, session.userId, {
+      nickname: session.nickname,
+      mainCharName: existing?.mainCharName || session.nickname,
+      abyss: existing?.abyss || {},
+      raid: existing?.raid || {},
+      guildMission: {
+        selectedIds: uniq2(nextSelectedIds),
+        checks: nextCheckedMap,
+      },
+    })
+  }
+
   const saveSelection = async () => {
     if (!session?.userId) return
     if (!gmDocRef) return
@@ -136,7 +149,6 @@ export default function GuildMissionPage() {
     try {
       setLoading(true)
 
-      // 문서 생성/갱신
       await setDoc(
         gmDocRef,
         {
@@ -147,7 +159,6 @@ export default function GuildMissionPage() {
         { merge: true },
       )
 
-      // 상위 users/{userId}도 갱신
       await setDoc(
         doc(db, 'weeks', weekKey, 'users', session.userId),
         {
@@ -158,6 +169,8 @@ export default function GuildMissionPage() {
         { merge: true },
       )
 
+      await syncDashboardGuildMission(selectedIds, checkedMap)
+
       window.alert('이번 주 길드미션(선택 2개) 저장 완료!')
     } catch (e) {
       console.error(e)
@@ -167,7 +180,6 @@ export default function GuildMissionPage() {
     }
   }
 
-  // 체크 1개 토글(Firestore) - 고정/선택 모두 같은 체크맵에 저장
   const toggleOne = async (missionId: string) => {
     if (!session?.userId) return
     if (!gmDocRef) return
@@ -178,12 +190,11 @@ export default function GuildMissionPage() {
 
     const current = checkedMap[missionId] ?? false
     const nextValue = !current
+    const nextCheckedMap = { ...checkedMap, [missionId]: nextValue }
 
-    // UI 먼저 반영
     setCheckedMap((prev) => ({ ...prev, [missionId]: nextValue }))
 
     try {
-      // 문서 존재 보장 + checks 한 칸만 업데이트
       await setDoc(
         gmDocRef,
         { selected: uniq2(selectedIds), expireAt },
@@ -201,8 +212,9 @@ export default function GuildMissionPage() {
         { updatedAt: serverTimestamp(), nickname: session.nickname, expireAt },
         { merge: true },
       )
+
+      await syncDashboardGuildMission(selectedIds, nextCheckedMap)
     } catch (e) {
-      // 실패 시 롤백
       setCheckedMap((prev) => ({ ...prev, [missionId]: current }))
       console.error(e)
       window.alert('저장에 실패했습니다. 콘솔(F12)을 확인해주세요.')
@@ -227,10 +239,9 @@ export default function GuildMissionPage() {
 
     const nextValue = !allDone
 
-    // UI 반영
-    const next: Record<string, boolean> = { ...checkedMap }
-    for (const m of visibleMissions) next[m.id] = nextValue
-    setCheckedMap(next)
+    const nextCheckedMap: Record<string, boolean> = { ...checkedMap }
+    for (const m of visibleMissions) nextCheckedMap[m.id] = nextValue
+    setCheckedMap(nextCheckedMap)
 
     try {
       const updates: Record<string, any> = {
@@ -256,6 +267,8 @@ export default function GuildMissionPage() {
         { updatedAt: serverTimestamp(), nickname: session.nickname, expireAt },
         { merge: true },
       )
+
+      await syncDashboardGuildMission(selectedIds, nextCheckedMap)
     } catch (e) {
       console.error(e)
       window.alert('저장에 실패했습니다. 콘솔(F12)을 확인해주세요.')

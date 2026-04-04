@@ -22,6 +22,7 @@ import {
   writeBatch,
   serverTimestamp,
 } from 'firebase/firestore'
+import { loadDashboardDoc, saveDashboardDoc } from '@/lib/dashboard'
 
 export default function AbyssPage() {
   const weekKey = useMemo(() => getWeekKeyKST(), [])
@@ -51,14 +52,12 @@ export default function AbyssPage() {
           return
         }
 
-        // 1) Firestore에서 먼저 로드
         const fromFs = await loadCharactersFromFirestore(s.userId)
         if (fromFs.length > 0) {
           setMyCharacters(fromFs)
           return
         }
 
-        // 2) Firestore가 비어있으면 (기존 PC 유저 대비) localStorage에서 가져와 업로드
         const local = loadCharacters()
         setMyCharacters(local)
 
@@ -73,7 +72,6 @@ export default function AbyssPage() {
     run()
   }, [])
 
-  // Firestore에서 이번 주 내 어비스 체크 로드
   useEffect(() => {
     let cancelled = false
 
@@ -116,13 +114,55 @@ export default function AbyssPage() {
     }
   }, [mounted, session?.userId, session?.nickname, weekKey, expireAt])
 
+  const syncDashboardAbyss = async (
+    nextCheckedMap: Record<string, Record<string, boolean>>,
+  ) => {
+    if (!session?.userId) return
+
+    const existing = await loadDashboardDoc(weekKey, session.userId)
+
+    const nextAbyss: Record<
+      string,
+      { charName: string; checks: Record<string, boolean> }
+    > = {}
+
+    for (const c of myCharacters) {
+      nextAbyss[c.id] = {
+        charName: c.name,
+        checks: nextCheckedMap[c.id] || {},
+      }
+    }
+
+    await saveDashboardDoc(weekKey, session.userId, {
+      nickname: session.nickname,
+      mainCharName:
+        existing?.mainCharName ||
+        myCharacters.find((c) => c.isMain)?.name ||
+        myCharacters[0]?.name ||
+        session.nickname,
+      abyss: nextAbyss,
+      raid: existing?.raid || {},
+      guildMission: existing?.guildMission || {
+        selectedIds: [],
+        checks: {},
+      },
+    })
+  }
+
   const toggleOne = async (charId: string, contentId: string) => {
     if (!session?.userId) return
 
     const current = checkedMap[charId]?.[contentId] ?? false
     const nextValue = !current
 
-    // UI 반영
+    const nextCheckedMap = {
+      ...checkedMap,
+      [charId]: {
+        ...(checkedMap[charId] || {}),
+        [contentId]: nextValue,
+      },
+    }
+
     setCheckedMap((prev) => {
       const charMap = prev[charId] || {}
       return { ...prev, [charId]: { ...charMap, [contentId]: nextValue } }
@@ -140,14 +180,12 @@ export default function AbyssPage() {
         charId,
       )
 
-      // 문서 존재 보장 (checks는 절대 건드리지 않음)
       await setDoc(
         docRef,
         { name: char?.name ?? '캐릭터', expireAt },
         { merge: true },
       )
 
-      // 체크 1개만 업데이트 (기존 checks 유지됨)
       await updateDoc(docRef, { [`checks.${contentId}`]: nextValue, expireAt })
 
       await setDoc(
@@ -155,8 +193,9 @@ export default function AbyssPage() {
         { updatedAt: serverTimestamp(), nickname: session.nickname, expireAt },
         { merge: true },
       )
+
+      await syncDashboardAbyss(nextCheckedMap)
     } catch (e) {
-      // 실패하면 UI 롤백
       setCheckedMap((prev) => {
         const charMap = prev[charId] || {}
         return { ...prev, [charId]: { ...charMap, [contentId]: current } }
@@ -180,11 +219,22 @@ export default function AbyssPage() {
       abyssList.length > 0 && abyssList.every((a) => current[a.id] === true)
     const nextValue = !allDone
 
-    // UI 반영
+    const nextCharMap: Record<string, boolean> = {
+      ...(checkedMap[charId] || {}),
+    }
+    for (const a of abyssList) nextCharMap[a.id] = nextValue
+
+    const nextCheckedMap = {
+      ...checkedMap,
+      [charId]: nextCharMap,
+    }
+
     setCheckedMap((prev) => {
-      const nextCharMap: Record<string, boolean> = { ...(prev[charId] || {}) }
-      for (const a of abyssList) nextCharMap[a.id] = nextValue
-      return { ...prev, [charId]: nextCharMap }
+      const nextCharMapFromPrev: Record<string, boolean> = {
+        ...(prev[charId] || {}),
+      }
+      for (const a of abyssList) nextCharMapFromPrev[a.id] = nextValue
+      return { ...prev, [charId]: nextCharMapFromPrev }
     })
 
     try {
@@ -201,7 +251,6 @@ export default function AbyssPage() {
 
       const batch = writeBatch(db)
 
-      // 문서 존재 보장 (checks는 절대 건드리지 않음)
       batch.set(
         docRef,
         { name: char?.name ?? '캐릭터', expireAt },
@@ -219,6 +268,7 @@ export default function AbyssPage() {
       )
 
       await batch.commit()
+      await syncDashboardAbyss(nextCheckedMap)
     } catch (e) {
       console.error(e)
       window.alert('저장에 실패했습니다. 콘솔(F12)을 확인하세요.')

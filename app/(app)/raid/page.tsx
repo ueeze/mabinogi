@@ -22,6 +22,7 @@ import {
   writeBatch,
   serverTimestamp,
 } from 'firebase/firestore'
+import { loadDashboardDoc, saveDashboardDoc } from '@/lib/dashboard'
 
 export default function RaidPage() {
   const weekKey = useMemo(() => getWeekKeyKST(), [])
@@ -51,14 +52,12 @@ export default function RaidPage() {
           return
         }
 
-        // 1) Firestore에서 먼저 로드
         const fromFs = await loadCharactersFromFirestore(s.userId)
         if (fromFs.length > 0) {
           setMyCharacters(fromFs)
           return
         }
 
-        // 2) Firestore가 비어있으면 (기존 PC 유저 대비) localStorage에서 가져와 업로드
         const local = loadCharacters()
         setMyCharacters(local)
 
@@ -73,7 +72,6 @@ export default function RaidPage() {
     run()
   }, [])
 
-  // Firestore에서 이번 주 내 레이드 체크 로드
   useEffect(() => {
     let cancelled = false
 
@@ -116,13 +114,55 @@ export default function RaidPage() {
     }
   }, [mounted, session?.userId, session?.nickname, weekKey, expireAt])
 
+  const syncDashboardRaid = async (
+    nextCheckedMap: Record<string, Record<string, boolean>>,
+  ) => {
+    if (!session?.userId) return
+
+    const existing = await loadDashboardDoc(weekKey, session.userId)
+
+    const nextRaid: Record<
+      string,
+      { charName: string; checks: Record<string, boolean> }
+    > = {}
+
+    for (const c of myCharacters) {
+      nextRaid[c.id] = {
+        charName: c.name,
+        checks: nextCheckedMap[c.id] || {},
+      }
+    }
+
+    await saveDashboardDoc(weekKey, session.userId, {
+      nickname: session.nickname,
+      mainCharName:
+        existing?.mainCharName ||
+        myCharacters.find((c) => c.isMain)?.name ||
+        myCharacters[0]?.name ||
+        session.nickname,
+      abyss: existing?.abyss || {},
+      raid: nextRaid,
+      guildMission: existing?.guildMission || {
+        selectedIds: [],
+        checks: {},
+      },
+    })
+  }
+
   const toggleOne = async (charId: string, contentId: string) => {
     if (!session?.userId) return
 
     const current = checkedMap[charId]?.[contentId] ?? false
     const nextValue = !current
 
-    // UI 반영
+    const nextCheckedMap = {
+      ...checkedMap,
+      [charId]: {
+        ...(checkedMap[charId] || {}),
+        [contentId]: nextValue,
+      },
+    }
+
     setCheckedMap((prev) => {
       const charMap = prev[charId] || {}
       return { ...prev, [charId]: { ...charMap, [contentId]: nextValue } }
@@ -140,14 +180,12 @@ export default function RaidPage() {
         charId,
       )
 
-      // 문서 존재 보장(여기서 checks를 절대 건드리지 않음)
       await setDoc(
         docRef,
         { name: char?.name ?? '캐릭터', expireAt },
         { merge: true },
       )
 
-      // 체크 1개만 업데이트(기존 checks 유지됨)
       await updateDoc(docRef, { [`checks.${contentId}`]: nextValue, expireAt })
 
       await setDoc(
@@ -155,8 +193,9 @@ export default function RaidPage() {
         { updatedAt: serverTimestamp(), nickname: session.nickname, expireAt },
         { merge: true },
       )
+
+      await syncDashboardRaid(nextCheckedMap)
     } catch (e) {
-      // 실패했으면 UI 롤백
       setCheckedMap((prev) => {
         const charMap = prev[charId] || {}
         return { ...prev, [charId]: { ...charMap, [contentId]: current } }
@@ -181,11 +220,22 @@ export default function RaidPage() {
       raidList.length > 0 && raidList.every((a) => prevCharMap[a.id] === true)
     const nextValue = !allDone
 
-    // UI 반영
+    const nextCharMap: Record<string, boolean> = {
+      ...(checkedMap[charId] || {}),
+    }
+    for (const a of raidList) nextCharMap[a.id] = nextValue
+
+    const nextCheckedMap = {
+      ...checkedMap,
+      [charId]: nextCharMap,
+    }
+
     setCheckedMap((prev) => {
-      const nextCharMap: Record<string, boolean> = { ...(prev[charId] || {}) }
-      for (const a of raidList) nextCharMap[a.id] = nextValue
-      return { ...prev, [charId]: nextCharMap }
+      const nextCharMapFromPrev: Record<string, boolean> = {
+        ...(prev[charId] || {}),
+      }
+      for (const a of raidList) nextCharMapFromPrev[a.id] = nextValue
+      return { ...prev, [charId]: nextCharMapFromPrev }
     })
 
     try {
@@ -202,7 +252,6 @@ export default function RaidPage() {
 
       const batch = writeBatch(db)
 
-      // 문서 존재 보장(여기서도 checks를 절대 건드리지 않음)
       batch.set(
         docRef,
         { name: char?.name ?? '캐릭터', expireAt },
@@ -220,8 +269,8 @@ export default function RaidPage() {
       )
 
       await batch.commit()
+      await syncDashboardRaid(nextCheckedMap)
     } catch (e) {
-      // 실패했으면 UI 롤백
       setCheckedMap((prev) => ({ ...prev, [charId]: prevCharMap }))
       console.error(e)
       window.alert('저장에 실패했어. 콘솔(F12) 확인해줘!')

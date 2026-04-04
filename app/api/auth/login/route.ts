@@ -26,8 +26,12 @@ export async function POST(req: Request) {
     )
   }
 
-  const doc = snap.docs[0]
-  const data = doc.data() as { passwordHash: string; nickname: string }
+  const userDoc = snap.docs[0]
+  const data = userDoc.data() as {
+    passwordHash: string
+    nickname: string
+    recoveryCode?: string
+  }
 
   const ok = await bcrypt.compare(password, data.passwordHash)
   if (!ok) {
@@ -37,5 +41,9 @@ export async function POST(req: Request) {
     )
   }
 
-  return NextResponse.json({ userId: doc.id, nickname: data.nickname })
+  return NextResponse.json({
+    userId: userDoc.id,
+    nickname: data.nickname,
+    hasRecoveryCode: !!String(data.recoveryCode || '').trim(),
+  })
 }

@@ -36,9 +36,21 @@ export default function LoginPage() {
         return
       }
 
-      const data = (await res.json()) as { userId: string; nickname: string }
+      const data = (await res.json()) as {
+        userId: string
+        nickname: string
+        hasRecoveryCode?: boolean
+      }
+
       saveSession({ userId: data.userId, nickname: data.nickname })
       clearLegacyCharacters()
+
+      // 복구코드 없는 기존 유저는 설정 페이지로 이동
+      if (!data.hasRecoveryCode) {
+        router.replace('/setup-recovery-code')
+        return
+      }
+
       router.replace('/')
     } catch {
       setError('네트워크 오류가 발생했습니다.')
@@ -92,14 +104,25 @@ export default function LoginPage() {
               {loading ? '로그인 중...' : '로그인'}
             </button>
 
-            <div className="text-center text-sm text-gray-600">
-              계정이 없으면{' '}
-              <Link
-                href="/signup"
-                className="font-medium text-gray-900 underline"
-              >
-                회원가입
-              </Link>
+            <div className="space-y-2 text-center text-sm text-gray-600">
+              <div>
+                <Link
+                  href="/reset-password"
+                  className="font-medium text-gray-900 underline"
+                >
+                  비밀번호를 잊으셨나요?
+                </Link>
+              </div>
+
+              <div>
+                계정이 없으면{' '}
+                <Link
+                  href="/signup"
+                  className="font-medium text-gray-900 underline"
+                >
+                  회원가입
+                </Link>
+              </div>
             </div>
           </div>
         </div>
