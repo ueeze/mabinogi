@@ -90,6 +90,8 @@ export default function HomePage() {
     [],
   )
 
+  console.log('현재 session:', session)
+
   const [mounted, setMounted] = useState(false)
   const [loading, setLoading] = useState(false)
 
@@ -390,6 +392,42 @@ export default function HomePage() {
         className="scroll-mt-24 rounded-2xl bg-white p-4 shadow-sm"
       >
         <div className="text-lg font-semibold text-gray-900">길드 현황</div>
+
+        {session?.nickname === 'ueeze' && (
+          <button
+            onClick={async () => {
+              console.log('버튼 클릭됨') // 추가
+
+              const ok = confirm('이번 주 전체 길드원 데이터를 생성할까요?')
+              if (!ok) return
+
+              try {
+                console.log('API 호출 시작') // 추가
+
+                const res = await fetch('/api/admin/generate-week-dashboard', {
+                  method: 'POST',
+                })
+
+                console.log('응답 상태:', res.status) // 추가
+
+                const data = await res.json()
+                console.log('응답 데이터:', data) // 추가
+
+                alert(
+                  `생성 완료\n생성: ${data.createdCount}명\n이미 있음: ${data.skippedCount}명`,
+                )
+
+                window.location.reload()
+              } catch (e) {
+                console.error(e)
+                alert('생성 중 오류 발생')
+              }
+            }}
+            className="mt-2 rounded-xl bg-black px-4 py-2 text-sm text-white hover:opacity-90"
+          >
+            이번 주 전체 생성 (관리자)
+          </button>
+        )}
         <div className="mt-1 text-sm text-gray-700">
           이번 주 기준: {weekKey} (월 06:00 시작)
         </div>
